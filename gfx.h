@@ -51,6 +51,7 @@ typedef uint32_t GfxCreateContextFlags;
 GfxContext gfxCreateContext(HWND window, GfxCreateContextFlags flags = 0, IDXGIAdapter *adapter = nullptr);
 GfxResult gfxDestroyContext(GfxContext context);
 
+void gfxAddIncludePath(GfxContext context, wchar_t const *path);
 uint32_t gfxGetBackBufferWidth(GfxContext context);
 uint32_t gfxGetBackBufferHeight(GfxContext context);
 uint32_t gfxGetBackBufferIndex(GfxContext context);
@@ -222,6 +223,7 @@ GfxResult gfxDrawStateSetDepthStencilTarget(GfxDrawState draw_state, GfxTexture 
 
 GfxResult gfxDrawStateSetCullMode(GfxDrawState draw_state, D3D12_CULL_MODE cull_mode);
 GfxResult gfxDrawStateSetDepthCmpOp(GfxDrawState draw_state, D3D12_COMPARISON_FUNC op);
+GfxResult gfxDrawStateSetTopology(GfxDrawState draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_type);
 GfxResult gfxDrawStateSetFillMode(GfxDrawState draw_state, D3D12_FILL_MODE fill_mode);
 GfxResult gfxDrawStateSetBlendMode(GfxDrawState draw_state, D3D12_BLEND src_blend, D3D12_BLEND dst_blend, D3D12_BLEND_OP blend_op, D3D12_BLEND src_blend_alpha, D3D12_BLEND dst_blend_alpha, D3D12_BLEND_OP blend_op_alpha);
 
@@ -245,7 +247,13 @@ class GfxProgramDesc { public: inline GfxProgramDesc() : cs(nullptr), vs(nullptr
                        char const *cs;
                        char const *vs;
                        char const *gs;
-                       char const *ps; };
+                       char const *ps;
+                       static GfxProgramDesc Compute(char const* cs) {
+                           GfxProgramDesc d = {};
+                           d.cs = cs;
+                           return d;
+                       }
+};
 
 GfxProgram gfxCreateProgram(GfxContext context, char const *file_name, char const *file_path = nullptr, char const *shader_model = nullptr);
 GfxProgram gfxCreateProgram(GfxContext context, GfxProgramDesc program_desc, char const *name = nullptr, char const *shader_model = nullptr);
@@ -290,7 +298,7 @@ class GfxKernel { GFX_INTERNAL_HANDLE(GfxKernel); char name[kGfxConstant_MaxName
                   inline bool isCompute() const { return type == kType_Compute; }
                   inline char const *getName() const { return name; } };
 
-GfxKernel gfxCreateComputeKernel(GfxContext context, GfxProgram program, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0);
+GfxKernel gfxCreateComputeKernel(GfxContext context, GfxProgram program, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0, char const **includes = nullptr, uint32_t include_count = 0);
 GfxKernel gfxCreateGraphicsKernel(GfxContext context, GfxProgram program, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0);    // draws to back buffer
 GfxKernel gfxCreateGraphicsKernel(GfxContext context, GfxProgram program, GfxDrawState draw_state, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0);
 GfxResult gfxDestroyKernel(GfxContext context, GfxKernel kernel);
@@ -317,7 +325,7 @@ GfxResult gfxCommandGenerateMips(GfxContext context, GfxTexture texture);   // e
 
 GfxResult gfxCommandBindKernel(GfxContext context, GfxKernel kernel);
 GfxResult gfxCommandBindIndexBuffer(GfxContext context, GfxBuffer index_buffer);
-GfxResult gfxCommandBindVertexBuffer(GfxContext context, GfxBuffer vertex_buffer);
+GfxResult gfxCommandBindVertexBuffer(GfxContext context, GfxBuffer vertex_buffer, uint32_t index = 0, uint64_t offset = 0, uint64_t stride = 0);
 
 GfxResult gfxCommandSetViewport(GfxContext context, float x = 0.0f, float y = 0.0f, float width = 0.0f, float height = 0.0f);   // leave at 0 to draw to render target/back buffer size
 GfxResult gfxCommandSetScissorRect(GfxContext context, int32_t x = 0, int32_t y = 0, int32_t width = 0, int32_t height = 0);    // leave at 0 to draw to render target/back buffer size
@@ -489,10 +497,12 @@ class GfxInternal
     GfxBuffer draw_id_buffer_ = {};
     uint64_t descriptor_heap_id_ = 0;
     GfxBuffer bound_index_buffer_ = {};
-    GfxBuffer bound_vertex_buffer_ = {};
+    GfxBuffer bound_vertex_buffers_[16] = {};
+    uint64_t bound_vertex_buffer_offsets_[16] = {};
+    uint64_t bound_vertex_buffer_strides_[16] = {};
     GfxBuffer texture_upload_buffer_ = {};
     GfxBuffer installed_index_buffer_ = {};
-    GfxBuffer installed_vertex_buffer_ = {};
+    GfxBuffer installed_vertex_buffers_[16] = {};
     bool force_install_index_buffer_ = false;
     bool force_install_vertex_buffer_ = false;
     bool force_install_draw_id_buffer_ = false;
@@ -500,6 +510,8 @@ class GfxInternal
     GfxBuffer *constant_buffer_pool_ = nullptr;
     uint64_t *constant_buffer_pool_cursors_ = nullptr;
     std::vector<GfxRaytracingPrimitive> active_raytracing_primitives_;
+
+    std::vector<std::wstring> extra_include_paths_ = {};
 
     struct Viewport
     {
@@ -690,6 +702,7 @@ class GfxInternal
             RenderTarget color_targets_[kGfxConstant_MaxRenderTarget] = {};
             RenderTarget depth_stencil_target_ = {};
             D3D12_COMPARISON_FUNC depth_op_                                    = D3D12_COMPARISON_FUNC_LESS;
+            bool per_instance_input_flags[16] = {};
             struct
             {
                 inline operator bool() const
@@ -709,6 +722,7 @@ class GfxInternal
                 D3D12_CULL_MODE cull_mode_ = D3D12_CULL_MODE_BACK;
                 D3D12_FILL_MODE fill_mode_ = D3D12_FILL_MODE_SOLID;
             } raster_state_;
+            D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_type = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         };
 
         DrawState() : reference_count_(0) {}
@@ -1066,6 +1080,7 @@ class GfxInternal
         GfxProgram program_ = {};
         DrawState::Data draw_state_;
         std::vector<String> defines_;
+        std::vector<String> includes_;
         uint64_t descriptor_heap_id_ = 0;
         uint32_t *num_threads_ = nullptr;
         IDxcBlob *cs_bytecode_ = nullptr;
@@ -1080,7 +1095,7 @@ class GfxInternal
         ID3D12PipelineState *pipeline_state_ = nullptr;
         Parameter *parameters_ = nullptr;
         uint32_t parameter_count_ = 0;
-        uint32_t vertex_stride_ = 0;
+        //uint32_t vertex_stride_ = 0;
     };
     GfxArray<Kernel> kernels_;
     GfxHandles kernel_handles_;
@@ -1575,6 +1590,11 @@ public:
         free(back_buffers_);
 
         return kGfxResult_NoError;
+    }
+
+    void AddIncludePath(wchar_t const* p)
+    {
+        extra_include_paths_.push_back(p);
     }
 
     inline uint32_t getBackBufferWidth() const
@@ -2455,7 +2475,7 @@ public:
         return kGfxResult_NoError;
     }
 
-    GfxKernel createComputeKernel(GfxProgram const &program, char const *entry_point, char const **defines, uint32_t define_count)
+    GfxKernel createComputeKernel(GfxProgram const &program, char const *entry_point, char const **defines, uint32_t define_count, char const **includes = nullptr, uint32_t include_count = 0)
     {
         GfxKernel compute_kernel = {};
         if(!program_handles_.has_handle(program.handle))
@@ -2473,6 +2493,7 @@ public:
         gfx_kernel.entry_point_ = entry_point;
         GFX_ASSERT(define_count == 0 || defines != nullptr);
         for(uint32_t i = 0; i < define_count; ++i) gfx_kernel.defines_.push_back(defines[i]);
+        for (uint32_t i = 0; i < include_count; ++i) gfx_kernel.includes_.push_back(includes[i]);
         gfx_kernel.num_threads_ = (uint32_t *)malloc(3 * sizeof(uint32_t)); for(uint32_t i = 0; i < 3; ++i) gfx_kernel.num_threads_[i] = 1;
         createKernel(gfx_program, gfx_kernel);  // create compute kernel
         if(!gfx_program.file_name_ && (gfx_kernel.root_signature_ == nullptr || gfx_kernel.pipeline_state_ == nullptr))
@@ -2747,7 +2768,7 @@ public:
         }
         else
         {
-            float const clear_color[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            float const clear_color[] = { 0.0f, 0.0f, 0.0f, 0.0f };
             GFX_TRY(ensureTextureHasRenderTargetView(texture, gfx_texture, mip_level, slice));
             GFX_ASSERT(gfx_texture.rtv_descriptor_slots_[mip_level][slice] != 0xFFFFFFFFu);
             D3D12_RESOURCE_DESC const resource_desc = gfx_texture.resource_->GetDesc();
@@ -2935,7 +2956,7 @@ public:
         return kGfxResult_NoError;
     }
 
-    GfxResult encodeBindVertexBuffer(GfxBuffer const &vertex_buffer)
+    GfxResult encodeBindVertexBuffer(GfxBuffer const &vertex_buffer, uint32_t index = 0, uint64_t offset = 0, uint64_t stride = 0)
     {
         if(command_list_ == nullptr)
             return GFX_SET_ERROR(kGfxResult_InvalidOperation, "Cannot encode without a valid command list");
@@ -2945,7 +2966,9 @@ public:
             return GFX_SET_ERROR(kGfxResult_InvalidOperation, "Cannot bind a vertex buffer object that's larger than 4GiB");
         if(vertex_buffer.cpu_access == kGfxCpuAccess_Read)
             return GFX_SET_ERROR(kGfxResult_InvalidOperation, "Cannot bind a vertex buffer object that has read CPU access");
-        bound_vertex_buffer_ = vertex_buffer;
+        bound_vertex_buffers_[index] = vertex_buffer;
+        bound_vertex_buffer_offsets_[index] = offset;
+        bound_vertex_buffer_strides_[index] = stride;
         return kGfxResult_NoError;
     }
 
@@ -4028,6 +4051,14 @@ public:
         gfx_draw_state->draw_state_.depth_op_ = op;
         return kGfxResult_NoError;
     }
+
+    static GfxResult SetDrawStateTopology(GfxDrawState const &draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_type) {
+        uint32_t const draw_state_index = static_cast<uint32_t>(draw_state.handle & 0xFFFFFFFFull);
+        DrawState     *gfx_draw_state   = draw_states_.at(draw_state_index);
+        if (!gfx_draw_state) return GFX_SET_ERROR(kGfxResult_InvalidParameter, "Cannot set depth cmp op on an invalid draw state object");
+        gfx_draw_state->draw_state_.primitive_type = primitive_type;
+        return kGfxResult_NoError;
+    }
     
     static GfxResult SetDrawStateFillMode(GfxDrawState const &draw_state, D3D12_FILL_MODE fill_mode)
     {
@@ -4947,7 +4978,7 @@ private:
         if(kernel.vs_reflection_ != nullptr)
         {
             D3D12_SHADER_DESC shader_desc = {};
-            GFX_ASSERT(kernel.vertex_stride_ == 0);
+            //GFX_ASSERT(kernel.vertex_stride_ == 0);
             kernel.vs_reflection_->GetDesc(&shader_desc);
             for(uint32_t i = 0; i < shader_desc.InputParameters; ++i)
             {
@@ -4991,11 +5022,15 @@ private:
                 input_desc.SemanticIndex     = parameter_desc.SemanticIndex;
                 input_desc.Format            = component_format;
                 input_desc.AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT;
-                if(!!strcmp(parameter_desc.SemanticName, "gfx_DrawID"))
-                    kernel.vertex_stride_ += component_count * sizeof(uint32_t);
+                input_desc.InputSlot         = i;
+                if(!!strcmp(parameter_desc.SemanticName, "gfx_DrawID") && kernel.draw_state_.per_instance_input_flags[i] == false) {
+                    // kernel.vertex_stride_ += component_count * sizeof(uint32_t);
+                    input_desc.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+                    input_desc.InstanceDataStepRate = 0;
+                }
                 else
                 {
-                    input_desc.InputSlot            = 1;
+                    
                     input_desc.InputSlotClass       = D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA;
                     input_desc.InstanceDataStepRate = 1;
                 }
@@ -5011,6 +5046,7 @@ private:
         pso_desc.RasterizerState.CullMode       = draw_state.raster_state_.cull_mode_;
         pso_desc.RasterizerState.FillMode       = draw_state.raster_state_.fill_mode_;
         pso_desc.DepthStencilState.DepthFunc    = draw_state.depth_op_;
+        pso_desc.PrimitiveTopologyType          = draw_state.primitive_type;
         pso_desc.InputLayout.pInputElementDescs = input_layout.data();
         pso_desc.InputLayout.NumElements        = (uint32_t)input_layout.size();
         {
@@ -5127,7 +5163,9 @@ private:
                 bound_scissor_rect_ = scissor_rect;
                 command_list_->RSSetScissorRects(1, &scissor_rect);
             }
-            command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            //command_list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            command_list_->IASetPrimitiveTopology(kernel.draw_state_.primitive_type == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE ? D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
+                                                                                                                              : D3D_PRIMITIVE_TOPOLOGY_LINELIST);
             command_list_->OMSetRenderTargets(color_target_count, color_targets, false, depth_stencil_target.ptr != 0 ? &depth_stencil_target : nullptr);
         }
         uint64_t const previous_descriptor_heap_id = getDescriptorHeapId();
@@ -5962,7 +6000,7 @@ private:
             else
                 command_list_->SetGraphicsRootDescriptorTable(i, descriptors_.getGPUHandle(descriptor_slot));
         }
-        if(!is_compute && kernel.vertex_stride_ > 0)
+        if(!is_compute /*&& kernel.vertex_stride_ > 0*/)
         {
             if(indexed && (force_install_index_buffer_ || bound_index_buffer_.handle != installed_index_buffer_.handle))
             {
@@ -5987,28 +6025,32 @@ private:
                 installed_index_buffer_ = bound_index_buffer_;
                 force_install_index_buffer_ = false;
             }
-            if(force_install_vertex_buffer_ || bound_vertex_buffer_.handle != installed_vertex_buffer_.handle)
-            {
-                D3D12_VERTEX_BUFFER_VIEW vbv_desc = {};
-                if(!buffer_handles_.has_handle(bound_vertex_buffer_.handle))
+            for (int i = 0; i < 16; i ++) {
+                if(force_install_vertex_buffer_ || bound_vertex_buffers_[i].handle != installed_vertex_buffers_[i].handle)
                 {
-                    bound_vertex_buffer_ = {};
-                    if(bound_vertex_buffer_.handle != 0)
-                        GFX_PRINT_ERROR(kGfxResult_InvalidOperation, "Found invalid buffer object for use as vertex buffer");
+                    D3D12_VERTEX_BUFFER_VIEW vbv_desc = {};
+                    if (!buffer_handles_.has_handle(bound_vertex_buffers_[i].handle))
+                    {
+                        bound_vertex_buffers_[i] = {};
+                        if (bound_vertex_buffers_[i].handle != 0)
+                            GFX_PRINT_ERROR(kGfxResult_InvalidOperation, "Found invalid buffer object for use as vertex buffer");
+                    }
+                    else
+                    {
+                        Buffer &gfx_buffer = buffers_[bound_vertex_buffers_[i]];
+                        SetObjectName(gfx_buffer, bound_vertex_buffers_[i].name);
+                        vbv_desc.BufferLocation = gfx_buffer.resource_->GetGPUVirtualAddress() + gfx_buffer.data_offset_ + bound_vertex_buffer_offsets_[i];
+                        vbv_desc.SizeInBytes    = (uint32_t)bound_vertex_buffers_[i].size;
+                        //vbv_desc.StrideInBytes  = GFX_MAX(bound_vertex_buffers_[i].stride, kernel.vertex_stride_);
+                        GFX_ASSERT(bound_vertex_buffers_[i].stride > 0);
+                        vbv_desc.StrideInBytes  = bound_vertex_buffer_strides_[i] != uint64_t(0) ? uint32_t(bound_vertex_buffer_strides_[i]) : uint32_t(bound_vertex_buffers_[i].stride);
+                        if (bound_vertex_buffers_[i].cpu_access == kGfxCpuAccess_None)
+                            transitionResource(gfx_buffer, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+                    }
+                    command_list_->IASetVertexBuffers(i, 1, &vbv_desc);
+                    installed_vertex_buffers_[i]     = bound_vertex_buffers_[i];
+                    force_install_vertex_buffer_ = false;
                 }
-                else
-                {
-                    Buffer &gfx_buffer = buffers_[bound_vertex_buffer_];
-                    SetObjectName(gfx_buffer, bound_vertex_buffer_.name);
-                    vbv_desc.BufferLocation = gfx_buffer.resource_->GetGPUVirtualAddress() + gfx_buffer.data_offset_;
-                    vbv_desc.SizeInBytes = (uint32_t)bound_vertex_buffer_.size;
-                    vbv_desc.StrideInBytes = GFX_MAX(bound_vertex_buffer_.stride, kernel.vertex_stride_);
-                    if(bound_vertex_buffer_.cpu_access == kGfxCpuAccess_None)
-                        transitionResource(gfx_buffer, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-                }
-                command_list_->IASetVertexBuffers(0, 1, &vbv_desc);
-                installed_vertex_buffer_ = bound_vertex_buffer_;
-                force_install_vertex_buffer_ = false;
             }
         }
         return kGfxResult_NoError;
@@ -7197,7 +7239,7 @@ private:
         free(kernel.parameters_);
         kernel.parameters_ = nullptr;
         kernel.parameter_count_ = 0;
-        kernel.vertex_stride_ = 0;
+        //kernel.vertex_stride_ = 0;
         createKernel(program, kernel);
     }
 
@@ -7261,8 +7303,21 @@ private:
         mbstowcs(wshader_profile, shader_profiles[shader_type], ARRAYSIZE(wshader_profile));
 
         std::vector<LPCWSTR> shader_args;
+        std::vector<std::wstring> includes_wide;
+        includes_wide.resize(kernel.includes_.size());
+        for (int i = 0; i < int(kernel.includes_.size()); i++) {
+            includes_wide[i] = std::wstring(kernel.includes_[i].c_str(), kernel.includes_[i].c_str() + kernel.includes_[i].size());        
+        }
         shader_args.push_back(wshader_file);
         shader_args.push_back(L"-I"); shader_args.push_back(L".");
+        for (int i = 0; i < int(kernel.includes_.size()); i++ ) {
+            shader_args.push_back(L"-I");
+            shader_args.push_back(includes_wide[i].c_str());
+        }
+        for (auto const & ip : extra_include_paths_) {
+            shader_args.push_back(L"-I");
+            shader_args.push_back(ip.c_str());
+        }
         shader_args.push_back(L"-E"); shader_args.push_back(wentry_point);
         shader_args.push_back(L"-T"); shader_args.push_back(wshader_profile);
         shader_args.push_back(L"-HV 2021");
@@ -7435,9 +7490,11 @@ private:
         if(*buffer.resource_state_ == D3D12_RESOURCE_STATE_INDEX_BUFFER &&  // unbind if active index buffer to prevent debug layer errors
            buffer_handles_.has_handle(bound_index_buffer_.handle) && buffers_[bound_index_buffer_].resource_ == buffer.resource_)
             command_list_->IASetIndexBuffer(nullptr);
-        if(*buffer.resource_state_ == D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER &&    // unbind if active vertex buffer to prevent debug layer errors
-           buffer_handles_.has_handle(bound_vertex_buffer_.handle) && buffers_[bound_vertex_buffer_].resource_ == buffer.resource_)
-            command_list_->IASetVertexBuffers(0, 1, nullptr);
+        for (int i = 0; i < 16; i++) {
+            if(*buffer.resource_state_ == D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER &&    // unbind if active vertex buffer to prevent debug layer errors
+               buffer_handles_.has_handle(bound_vertex_buffers_[i].handle) && buffers_[bound_vertex_buffers_[i]].resource_ == buffer.resource_)
+                command_list_->IASetVertexBuffers(i, 1, nullptr);
+        }
         D3D12_RESOURCE_BARRIER resource_barrier = {};
         resource_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         resource_barrier.Transition.pResource = buffer.resource_;
@@ -7622,6 +7679,13 @@ GfxResult gfxDestroyContext(GfxContext context)
     if(!gfx) return kGfxResult_NoError; // nothing to destroy
     if(!gfx->isInterop()) GFX_TRY(gfx->finish()); delete gfx;
     return kGfxResult_NoError;
+}
+
+void gfxAddIncludePath(GfxContext context, wchar_t const* path)
+{
+    GfxInternal *gfx = GfxInternal::GetGfx(context);
+    if(!gfx) return;  // invalid context
+    gfx->AddIncludePath(path);
 }
 
 uint32_t gfxGetBackBufferWidth(GfxContext context)
@@ -7918,6 +7982,8 @@ GfxResult gfxDrawStateSetDepthCmpOp(GfxDrawState draw_state, D3D12_COMPARISON_FU
     return GfxInternal::SetDrawStateDepthCmpOp(draw_state, op);
 }
 
+GfxResult gfxDrawStateSetTopology(GfxDrawState draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_type) { return GfxInternal::SetDrawStateTopology(draw_state, primitive_type); }
+
 GfxResult gfxDrawStateSetFillMode(GfxDrawState draw_state, D3D12_FILL_MODE fill_mode)
 {
     return GfxInternal::SetDrawStateFillMode(draw_state, fill_mode);
@@ -8007,12 +8073,12 @@ GfxResult gfxProgramSetConstants(GfxContext context, GfxProgram program, char co
     return gfx->setProgramConstants(program, parameter_name, data, data_size);
 }
 
-GfxKernel gfxCreateComputeKernel(GfxContext context, GfxProgram program, char const *entry_point, char const **defines, uint32_t define_count)
+GfxKernel gfxCreateComputeKernel(GfxContext context, GfxProgram program, char const *entry_point, char const **defines, uint32_t define_count, char const **includes, uint32_t include_count)
 {
     GfxKernel const compute_kernel = {};
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return compute_kernel; // invalid context
-    return gfx->createComputeKernel(program, entry_point, defines, define_count);
+    return gfx->createComputeKernel(program, entry_point, defines, define_count, includes, include_count);
 }
 
 GfxKernel gfxCreateGraphicsKernel(GfxContext context, GfxProgram program, char const *entry_point, char const **defines, uint32_t define_count)
@@ -8134,11 +8200,10 @@ GfxResult gfxCommandBindIndexBuffer(GfxContext context, GfxBuffer index_buffer)
     return gfx->encodeBindIndexBuffer(index_buffer);
 }
 
-GfxResult gfxCommandBindVertexBuffer(GfxContext context, GfxBuffer vertex_buffer)
-{
+GfxResult gfxCommandBindVertexBuffer(GfxContext context, GfxBuffer vertex_buffer, uint32_t index, uint64_t offset, uint64_t stride) {
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return kGfxResult_InvalidParameter;
-    return gfx->encodeBindVertexBuffer(vertex_buffer);
+    return gfx->encodeBindVertexBuffer(vertex_buffer, index, offset, stride);
 }
 
 GfxResult gfxCommandSetViewport(GfxContext context, float x, float y, float width, float height)
