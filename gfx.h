@@ -301,6 +301,7 @@ class GfxKernel { GFX_INTERNAL_HANDLE(GfxKernel); char name[kGfxConstant_MaxName
 GfxKernel gfxCreateComputeKernel(GfxContext context, GfxProgram program, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0, char const **includes = nullptr, uint32_t include_count = 0);
 GfxKernel gfxCreateGraphicsKernel(GfxContext context, GfxProgram program, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0);    // draws to back buffer
 GfxKernel gfxCreateGraphicsKernel(GfxContext context, GfxProgram program, GfxDrawState draw_state, char const *entry_point = nullptr, char const **defines = nullptr, uint32_t define_count = 0);
+char const *gfxKernelGetIsa(GfxContext context, GfxKernel kernel);
 GfxResult gfxDestroyKernel(GfxContext context, GfxKernel kernel);
 
 uint32_t const *gfxKernelGetNumThreads(GfxContext context, GfxKernel kernel);
@@ -456,6 +457,12 @@ GfxBuffer gfxCreateBuffer(GfxContext context, ID3D12Resource *resource, D3D12_RE
 
 #pragma warning(push)
 #pragma warning(disable:4996)   // this function or variable may be unsafe
+
+// https://github.com/baldurk/renderdoc/blob/2ace1fe84d62e2b2b5fdd25894dc3186864ee8fe/util/test/demos/dx/official/d3dcommon.h#L1041
+#undef DEFINE_GUID
+#define DEFINE_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) EXTERN_C const GUID DECLSPEC_SELECTANY name = {l, w1, w2, {b1, b2, b3, b4, b5, b6, b7, b8}}
+DEFINE_GUID(WKPDID_CommentStringW, 0xd0149dc0, 0x90e8, 0x4ec8, 0x81, 0x44, 0xe9, 0x00, 0xad, 0x26, 0x6b, 0xb2);
+#undef DEFINE_GUID
 
 class GfxInternal
 {
@@ -615,6 +622,7 @@ class GfxInternal
         GFX_NON_COPYABLE(String);
         inline String() : data_(nullptr) {}
         inline String(char const *data) : data_(nullptr) { *this = data; }
+        inline String(char const *data, size_t len) : data_((char*)malloc(len + 1)) { memcpy(data_, data, len); data_[len] = '\0'; }
         inline String(String &&other) : data_(other.data_) { other.data_ = nullptr; }
         inline String &operator =(String &&other) { if(this != &other) { free(data_); data_ = other.data_; other.data_ = nullptr; } return *this; }
         inline String &operator =(char const *data) { free(data_); if(!data) data_ = nullptr; else
@@ -1095,6 +1103,7 @@ class GfxInternal
         ID3D12PipelineState *pipeline_state_ = nullptr;
         Parameter *parameters_ = nullptr;
         uint32_t parameter_count_ = 0;
+        String                  isa_  = {};
         //uint32_t vertex_stride_ = 0;
     };
     GfxArray<Kernel> kernels_;
@@ -2549,6 +2558,13 @@ public:
             return graphics_kernel;
         }
         return graphics_kernel;
+    }
+
+    char const *gfxKernelGetIsa(GfxKernel kernel)
+    {
+        if (!kernel) return NULL;
+        if (!kernel_handles_.has_handle(kernel.handle)) return NULL;
+        return kernels_[kernel].isa_.c_str();
     }
 
     GfxResult destroyKernel(GfxKernel const &kernel)
@@ -7190,6 +7206,40 @@ private:
                 for(uint32_t i = 0; i < 3; ++i) kernel.num_threads_[i] = 1;
             else
                 kernel.cs_reflection_->GetThreadGroupSize(&kernel.num_threads_[0], &kernel.num_threads_[1], &kernel.num_threads_[2]);
+
+
+            // https://github.com/baldurk/renderdoc/blob/ca4d79c0a34f4186e8a6ec39a0c9568b5c920ed8/renderdoc/driver/d3d12/d3d12_replay.cpp#L624
+            UINT size = UINT(0);
+            kernel.pipeline_state_->GetPrivateData(WKPDID_CommentStringW, &size, NULL);
+
+            if (size != UINT(0)) {
+
+                byte *data = new byte[size + UINT(1)];
+                
+                memset(data, UINT(0), size);
+
+                kernel.pipeline_state_->GetPrivateData(WKPDID_CommentStringW, &size, data);
+
+                char const *iter = (char const *)data;
+
+                char const *cdata_iter = strstr(iter, "![CDATA[");
+
+                if (cdata_iter) {
+                    
+                    iter = cdata_iter + strlen("![CDATA[");
+
+                     char const *comment_iter = strstr(iter, "]]></comment>");
+
+
+                    if (comment_iter) {
+                        kernel.isa_ = String(iter, size_t(comment_iter - iter));
+                    }
+
+                } else {
+                    // Failed to find the right section
+                }
+                delete[] data;
+            }
         }
         else
         {
@@ -8071,6 +8121,13 @@ GfxResult gfxProgramSetConstants(GfxContext context, GfxProgram program, char co
     GfxInternal *gfx = GfxInternal::GetGfx(context);
     if(!gfx) return kGfxResult_InvalidParameter;
     return gfx->setProgramConstants(program, parameter_name, data, data_size);
+}
+
+char const *gfxKernelGetIsa(GfxContext context, GfxKernel kernel)
+{
+    GfxInternal    *gfx            = GfxInternal::GetGfx(context);
+    if (!gfx) return NULL; // invalid context
+    return gfx->gfxKernelGetIsa(kernel);
 }
 
 GfxKernel gfxCreateComputeKernel(GfxContext context, GfxProgram program, char const *entry_point, char const **defines, uint32_t define_count, char const **includes, uint32_t include_count)
