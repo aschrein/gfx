@@ -263,7 +263,9 @@ public:
 
             gfxCommandBindKernel(gfx_, imgui_kernel_);
             gfxCommandBindIndexBuffer(gfx_, index_buffer);
-            gfxCommandBindVertexBuffer(gfx_, vertex_buffer);
+            gfxCommandBindVertexBuffer(gfx_, vertex_buffer, uint32_t(0), uint64_t(0), sizeof(ImDrawVert));
+            gfxCommandBindVertexBuffer(gfx_, vertex_buffer, uint32_t(1), uint64_t(8), sizeof(ImDrawVert));
+            gfxCommandBindVertexBuffer(gfx_, vertex_buffer, uint32_t(2), uint64_t(16), sizeof(ImDrawVert));
             gfxCommandSetViewport(gfx_);    // draw to back buffer
 
             int32_t vtx_offset = 0;
