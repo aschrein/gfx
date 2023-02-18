@@ -223,6 +223,7 @@ GfxResult gfxDrawStateSetDepthStencilTarget(GfxDrawState draw_state, GfxTexture 
 
 GfxResult gfxDrawStateSetCullMode(GfxDrawState draw_state, D3D12_CULL_MODE cull_mode);
 GfxResult gfxDrawStateSetDepthCmpOp(GfxDrawState draw_state, D3D12_COMPARISON_FUNC op);
+GfxResult gfxDrawStateSetInstanceInputSlot(GfxDrawState draw_state, uint32_t index);
 GfxResult gfxDrawStateSetTopology(GfxDrawState draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_type);
 GfxResult gfxDrawStateSetFillMode(GfxDrawState draw_state, D3D12_FILL_MODE fill_mode);
 GfxResult gfxDrawStateSetBlendMode(GfxDrawState draw_state, D3D12_BLEND src_blend, D3D12_BLEND dst_blend, D3D12_BLEND_OP blend_op, D3D12_BLEND src_blend_alpha, D3D12_BLEND dst_blend_alpha, D3D12_BLEND_OP blend_op_alpha);
@@ -4065,6 +4066,14 @@ public:
         DrawState     *gfx_draw_state   = draw_states_.at(draw_state_index);
         if (!gfx_draw_state) return GFX_SET_ERROR(kGfxResult_InvalidParameter, "Cannot set depth cmp op on an invalid draw state object");
         gfx_draw_state->draw_state_.depth_op_ = op;
+        return kGfxResult_NoError;
+    }
+
+    static GfxResult SetDrawStateInstanceInputSlot(GfxDrawState const &draw_state, uint32_t index) {
+        uint32_t const draw_state_index = static_cast<uint32_t>(draw_state.handle & 0xFFFFFFFFull);
+        DrawState     *gfx_draw_state   = draw_states_.at(draw_state_index);
+        if (!gfx_draw_state) return GFX_SET_ERROR(kGfxResult_InvalidParameter, "invalid draw state object");
+        gfx_draw_state->draw_state_.per_instance_input_flags[index] = true;
         return kGfxResult_NoError;
     }
 
@@ -8032,6 +8041,11 @@ GfxResult gfxDrawStateSetCullMode(GfxDrawState draw_state, D3D12_CULL_MODE cull_
 GfxResult gfxDrawStateSetDepthCmpOp(GfxDrawState draw_state, D3D12_COMPARISON_FUNC op)
 {
     return GfxInternal::SetDrawStateDepthCmpOp(draw_state, op);
+}
+
+GfxResult gfxDrawStateSetInstanceInputSlot(GfxDrawState draw_state, uint32_t index)
+{
+    return GfxInternal::SetDrawStateInstanceInputSlot(draw_state, index);
 }
 
 GfxResult gfxDrawStateSetTopology(GfxDrawState draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE primitive_type) { return GfxInternal::SetDrawStateTopology(draw_state, primitive_type); }

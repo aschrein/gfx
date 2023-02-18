@@ -26,6 +26,7 @@ SOFTWARE.
 
 #include "gfx.h"
 #include "imgui.h"
+#include <unordered_map>
 
 //!
 //! ImGui initialization/termination.
@@ -43,6 +44,16 @@ bool gfxImGuiIsInitialized();
 //! Implementation details.
 //!
 
+struct GfxImguiTextureParameters {
+    bool disable_alpha = false;
+    uint32_t slice = uint32_t(0);
+
+    static std::unordered_map<GfxTexture const *, GfxImguiTextureParameters> &GetConfig() {
+        static std::unordered_map<GfxTexture const *, GfxImguiTextureParameters> config = {};
+        return config;
+    }
+};
+
 #ifdef GFX_IMPLEMENTATION_DEFINE
 
 #pragma once
@@ -52,6 +63,9 @@ bool gfxImGuiIsInitialized();
 #include "imgui_tables.cpp"
 #include "imgui_widgets.cpp"
 #include "backends/imgui_impl_win32.cpp"
+
+#define GFX_IMGUI_TEXTURE_FLAGS_DISABLE_ALPHA_BIT (1 << 0)
+#define GFX_IMGUI_TEXTURE_FLAGS_USE_3D_BIT (1 << 1)
 
 class GfxImGuiInternal
 {
@@ -138,21 +152,35 @@ public:
             "    output.col = col;\r\n"
             "    return output;\r\n"
             "}\r\n";
-        imgui_program_desc.ps =
-            "Texture2D FontBuffer;\r\n"
-            "SamplerState FontSampler;\r\n"
-            "\r\n"
-            "struct Pixel\r\n"
-            "{\r\n"
-            "    float4 pos : SV_Position;\r\n"
-            "    float2 uv  : TEXCOORD;\r\n"
-            "    float4 col : COLOR;\r\n"
-            "};\r\n"
-            "\r\n"
-            "float4 main(in Pixel input) : SV_Target\r\n"
-            "{\r\n"
-            "    return input.col * FontBuffer.SampleLevel(FontSampler, input.uv, 0.0f);\r\n"
-            "}\r\n";
+        imgui_program_desc.ps =R"(
+            Texture2D FontBuffer;
+            Texture3D FontBuffer3D;
+            SamplerState FontSampler;
+            uint g_flags;
+            float g_depth_z;
+            #define GFX_IMGUI_TEXTURE_FLAGS_DISABLE_ALPHA_BIT (1 << 0)
+            #define GFX_IMGUI_TEXTURE_FLAGS_USE_3D_BIT (1 << 1)
+            struct Pixel
+            {
+                float4 pos : SV_Position;
+                float2 uv  : TEXCOORD;
+                float4 col : COLOR;
+            };
+            
+            float4 main(in Pixel input) : SV_Target
+            {
+                float4 val;
+                if (g_flags & GFX_IMGUI_TEXTURE_FLAGS_USE_3D_BIT) {
+                    // uint3 dims;
+                    // FontBuffer3D.GetDimensions(dims.x, dims.y, dims.z);
+                    val = FontBuffer3D.SampleLevel(FontSampler, float3(input.uv, g_depth_z), 0.0f);     
+                } else {
+                    val = FontBuffer.SampleLevel(FontSampler, input.uv, 0.0f);                
+                }
+                if (g_flags & GFX_IMGUI_TEXTURE_FLAGS_DISABLE_ALPHA_BIT)
+                    val.w = float(1.0);
+                return input.col * val;
+            })";
         imgui_program_ = gfxCreateProgram(gfx_, imgui_program_desc, "gfx_ImGuiProgram");
         GFX_TRY(gfxDrawStateEnableAlphaBlending(imgui_draw_state)); // enable alpha blending
         GFX_TRY(gfxDrawStateSetCullMode(imgui_draw_state, D3D12_CULL_MODE_NONE));
@@ -282,8 +310,24 @@ public:
                             cmd->ClipRect.y != cmd->ClipRect.w)
                     {
                         GfxTexture const *font_buffer = (GfxTexture const *)cmd->TextureId;
-                        if(font_buffer != nullptr)
+                        if (font_buffer != nullptr && font_buffer->getDepth() == uint32_t(1))
                             gfxProgramSetParameter(gfx_, imgui_program_, "FontBuffer", *font_buffer);
+                        uint32_t flags = uint32_t(0);
+                        if (font_buffer && font_buffer != &font_buffer_) {
+                            flags = uint32_t(GFX_IMGUI_TEXTURE_FLAGS_DISABLE_ALPHA_BIT);
+                            if (font_buffer->getDepth() != 1) {
+                                gfxProgramSetParameter(gfx_, imgui_program_, "FontBuffer3D", *font_buffer);
+                                flags |= GFX_IMGUI_TEXTURE_FLAGS_USE_3D_BIT;    
+                            }
+                            auto it = GfxImguiTextureParameters::GetConfig().find(font_buffer);
+                            if (it != GfxImguiTextureParameters::GetConfig().end()) {
+                                if (it->second.disable_alpha == false) {
+                                    flags &= ~GFX_IMGUI_TEXTURE_FLAGS_DISABLE_ALPHA_BIT;    
+                                }
+                                gfxProgramSetParameter(gfx_, imgui_program_, "g_depth_z", (float(it->second.slice) + float(0.5)) / float(font_buffer->getDepth()));
+                            }
+                        }
+                        gfxProgramSetParameter(gfx_, imgui_program_, "g_flags", flags);
                         gfxCommandSetScissorRect(gfx_, (int32_t)cmd->ClipRect.x,
                                                        (int32_t)cmd->ClipRect.y,
                                                        (int32_t)(cmd->ClipRect.z - cmd->ClipRect.x),
