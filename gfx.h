@@ -7207,38 +7207,40 @@ private:
             else
                 kernel.cs_reflection_->GetThreadGroupSize(&kernel.num_threads_[0], &kernel.num_threads_[1], &kernel.num_threads_[2]);
 
+            if (kernel.pipeline_state_)
+            {
+                // https://github.com/baldurk/renderdoc/blob/ca4d79c0a34f4186e8a6ec39a0c9568b5c920ed8/renderdoc/driver/d3d12/d3d12_replay.cpp#L624
+                UINT size = UINT(0);
+                kernel.pipeline_state_->GetPrivateData(WKPDID_CommentStringW, &size, NULL);
 
-            // https://github.com/baldurk/renderdoc/blob/ca4d79c0a34f4186e8a6ec39a0c9568b5c920ed8/renderdoc/driver/d3d12/d3d12_replay.cpp#L624
-            UINT size = UINT(0);
-            kernel.pipeline_state_->GetPrivateData(WKPDID_CommentStringW, &size, NULL);
+                if (size != UINT(0)) {
 
-            if (size != UINT(0)) {
-
-                byte *data = new byte[size + UINT(1)];
+                    byte *data = new byte[size + UINT(1)];
                 
-                memset(data, UINT(0), size);
+                    memset(data, UINT(0), size);
 
-                kernel.pipeline_state_->GetPrivateData(WKPDID_CommentStringW, &size, data);
+                    kernel.pipeline_state_->GetPrivateData(WKPDID_CommentStringW, &size, data);
 
-                char const *iter = (char const *)data;
+                    char const *iter = (char const *)data;
 
-                char const *cdata_iter = strstr(iter, "![CDATA[");
+                    char const *cdata_iter = strstr(iter, "![CDATA[");
 
-                if (cdata_iter) {
+                    if (cdata_iter) {
                     
-                    iter = cdata_iter + strlen("![CDATA[");
+                        iter = cdata_iter + strlen("![CDATA[");
 
-                     char const *comment_iter = strstr(iter, "]]></comment>");
+                         char const *comment_iter = strstr(iter, "]]></comment>");
 
 
-                    if (comment_iter) {
-                        kernel.isa_ = String(iter, size_t(comment_iter - iter));
+                        if (comment_iter) {
+                            kernel.isa_ = String(iter, size_t(comment_iter - iter));
+                        }
+
+                    } else {
+                        // Failed to find the right section
                     }
-
-                } else {
-                    // Failed to find the right section
+                    delete[] data;
                 }
-                delete[] data;
             }
         }
         else
