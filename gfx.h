@@ -511,6 +511,7 @@ class GfxInternal
     GfxBuffer texture_upload_buffer_ = {};
     GfxBuffer installed_index_buffer_ = {};
     GfxBuffer installed_vertex_buffers_[16] = {};
+    uint64_t installed_vertex_buffer_offsets_[16] = {};
     bool force_install_index_buffer_ = false;
     bool force_install_vertex_buffer_ = false;
     bool force_install_draw_id_buffer_ = false;
@@ -711,7 +712,7 @@ class GfxInternal
             RenderTarget color_targets_[kGfxConstant_MaxRenderTarget] = {};
             RenderTarget depth_stencil_target_ = {};
             D3D12_COMPARISON_FUNC depth_op_                                    = D3D12_COMPARISON_FUNC_LESS;
-            bool per_instance_input_flags[16] = {};
+            bool per_instance_input_flags[16] = {false};
             struct
             {
                 inline operator bool() const
@@ -6051,7 +6052,8 @@ private:
                 force_install_index_buffer_ = false;
             }
             for (int i = 0; i < 16; i ++) {
-                if(force_install_vertex_buffer_ || bound_vertex_buffers_[i].handle != installed_vertex_buffers_[i].handle)
+                if (force_install_vertex_buffer_ || bound_vertex_buffers_[i].handle != installed_vertex_buffers_[i].handle ||
+                    bound_vertex_buffer_offsets_[i] != installed_vertex_buffer_offsets_[i])
                 {
                     D3D12_VERTEX_BUFFER_VIEW vbv_desc = {};
                     if (!buffer_handles_.has_handle(bound_vertex_buffers_[i].handle))
@@ -6073,7 +6075,8 @@ private:
                             transitionResource(gfx_buffer, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
                     }
                     command_list_->IASetVertexBuffers(i, 1, &vbv_desc);
-                    installed_vertex_buffers_[i]     = bound_vertex_buffers_[i];
+                    installed_vertex_buffers_[i]        = bound_vertex_buffers_[i];
+                    installed_vertex_buffer_offsets_[i] = bound_vertex_buffer_offsets_[i];
                     force_install_vertex_buffer_ = false;
                 }
             }
