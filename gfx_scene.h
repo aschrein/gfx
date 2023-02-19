@@ -1279,7 +1279,7 @@ private:
             GfxRef<GfxImage> image_ref;
             if(gltf_image->uri != nullptr)
             {
-                char const *filename = GFX_MAX(strrchr(asset_file, '/'), strrchr(asset_file, '//'));
+                char const *filename = GFX_MAX(strrchr(asset_file, '/'), strrchr(asset_file, '\\'));
                 std::string image_folder =
                     (filename != nullptr ? std::string(asset_file, 0, filename - asset_file)
                                          : std::string(""));
@@ -1408,7 +1408,7 @@ private:
                         if(gfxImageIsFormatCompressed(*gfxSceneGetObject<GfxImage>(scene, (*it).second)))
                         {
                             GFX_PRINT_ERROR(kGfxResult_InvalidOperation, "Compressed textures require separate metal/roughness textures '%s'",
-                                image_metadata_[(*it).second].asset_file);
+                                image_metadata_[(*it).second].asset_file.c_str());
                             continue;
                         }
                         metallicity_map_ref = gfxSceneCreateImage(scene);
@@ -1977,7 +1977,7 @@ private:
     {
         GfxRef<GfxImage>* image_ref = (GfxRef<GfxImage>*)userdata;
         uint8_t* back = &*((*image_ref)->data.end());
-        uint64_t current_pos = (*image_ref)->data.size();
+        //uint64_t current_pos = (*image_ref)->data.size();
         (*image_ref)->data.resize((*image_ref)->data.size() + faceLodSize);
         memcpy(back, pixels, faceLodSize);
         return KTX_SUCCESS;
